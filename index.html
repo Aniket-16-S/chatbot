@@ -48,49 +48,7 @@
 </head>
 <body>
 
-    <div id="chat-container">
-        <div id="chat-box"></div>
-        <input type="text" id="user-input" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
-    </div>
-
-    <script>
-        async function sendMessage() {
-            let userInput = document.getElementById("user-input");
-            let message = userInput.value.trim();
-            if (message === "") return;
-
-            // Display user message
-            displayMessage(message, "user-message");
-
-            // Send to Python backend
-            let response = await fetch("http://127.0.0.1:5000/chatbot", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: message })
-            });
-
-            let data = await response.json();
-            displayMessage(data.response, "bot-message");
-
-            // Clear input field
-            userInput.value = "";
-        }
-
-        function displayMessage(text, className) {
-            let chatBox = document.getElementById("chat-box");
-            let messageDiv = document.createElement("div");
-            messageDiv.classList.add("message", className);
-            messageDiv.innerText = text;
-            chatBox.appendChild(messageDiv);
-            chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
-        }
-
-        function handleKeyPress(event) {
-            if (event.key === "Enter") {
-                sendMessage();
-            }
-        }
-    </script>
+   
 
 <h1 align="center"> This is test version </h1>
 <pre align="left" style="font-size:17px"> 
@@ -125,7 +83,7 @@ intents = [
 
     {"tag": "college_info",
      "patterns": ["Where is the college", "Tell me about the college", "What is the college name"],
-     "responses": ["Your college is Finolex Academy of Management and Technology.", "The college is located in Ratnagiri.", "Finolex Academy is known for its engineering programs."]},
+     "responses": ["Your college is ABC.", "The college is located in Ratnagiri.", "Finolex Academy is known for its engineering programs."]},
 
     {"tag": "subject_info",
      "patterns": ["What subjects do we have", "Tell me about my subjects", "List my courses"],
