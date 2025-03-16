@@ -1,101 +1,102 @@
-import os
 import json
+import numpy as np
+import tensorflow as tf
 import random
 import nltk
-import torch
-import streamlit as st
-import sqlite3
-from flask import Flask, request, jsonify
-from sentence_transformers import SentenceTransformer
-from nltk.corpus import wordnet
-from textblob import TextBlob
-from transformers import pipeline
-from flask_cors import CORS
+from nltk.stem import LancasterStemmer
+from sklearn.preprocessing import LabelEncoder
 
-# Download required nltk data
-nltk.download('wordnet')
+stemmer = LancasterStemmer()
 nltk.download('punkt')
 
-# Load pre-trained model for embeddings
-model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+# Load intents from JSON file
+with open("faq.json", "r") as file:
+    intents = json.load(file)
 
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)
+# Data Preprocessing
+words = []
+classes = []
+documents = []
+ignore_words = ["?", "!", ".", ","]
 
-# Load FAQ data from SQLite
-conn = sqlite3.connect("chatbot.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS faqs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        question TEXT,
-        answer TEXT
-    )
-""")
-conn.commit()
+# Tokenize and stem words
+for intent in intents["intents"]:
+    for pattern in intent["patterns"]:
+        word_list = nltk.word_tokenize(pattern)
+        words.extend(word_list)
+        documents.append((word_list, intent["tag"]))
 
-# Function to get responses from database
-def get_response(user_input):
-    cursor.execute("SELECT question, answer FROM faqs")
-    faqs = cursor.fetchall()
-    questions = [q[0] for q in faqs]
-    answers = [q[1] for q in faqs]
-    
-    embeddings = model.encode(questions)
-    input_embedding = model.encode([user_input])
-    similarities = torch.nn.functional.cosine_similarity(
-        torch.tensor(embeddings), torch.tensor(input_embedding), dim=1
-    )
-    best_match = torch.argmax(similarities).item()
-    
-    if similarities[best_match] > 0.7:
-        return answers[best_match]
-    else:
-        return "I'm not sure about that. Can you rephrase or provide more details?"
+        if intent["tag"] not in classes:
+            classes.append(intent["tag"])
 
-# Data Augmentation with Synonyms
-def augment_text(text):
-    words = nltk.word_tokenize(text)
-    new_words = []
-    for word in words:
-        synonyms = wordnet.synsets(word)
-        if synonyms:
-            synonym = synonyms[0].lemmas()[0].name()
-            new_words.append(synonym)
-        else:
-            new_words.append(word)
-    return " ".join(new_words)
+words = sorted(set([stemmer.stem(w.lower()) for w in words if w not in ignore_words]))
+classes = sorted(set(classes))
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    data = request.json
-    user_input = data.get("message", "")
-    response = get_response(user_input)
-    return jsonify({"response": response})
+# Create training data
+training = []
+output_empty = [0] * len(classes)
 
-# Streamlit UI
-def main():
-    st.title("Advanced AI Chatbot")
-    st.write("Chat with our AI-powered assistant.")
+for doc in documents:
+    bag = [1 if w in [stemmer.stem(word.lower()) for word in doc[0]] else 0 for w in words]
+    output_row = list(output_empty)
+    output_row[classes.index(doc[1])] = 1
+    training.append([bag, output_row])
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+# Convert to numpy arrays
+random.shuffle(training)
+train_x, train_y = zip(*training)
+train_x = np.array(train_x)
+train_y = np.array(train_y)
 
-    user_input = st.text_input("You:")
+# Build Model using TensorFlow
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(128, input_shape=(len(train_x[0]),), activation="relu"),
+    tf.keras.layers.Dropout(0.5),
+    tf.keras.layers.Dense(64, activation="relu"),
+    tf.keras.layers.Dropout(0.5),
+    tf.keras.layers.Dense(len(train_y[0]), activation="softmax")
+])
 
-    if user_input:
-        response = get_response(user_input)
-        st.session_state.chat_history.append(("You", user_input))
-        st.session_state.chat_history.append(("Chatbot", response))
+model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
+model.fit(train_x, train_y, epochs=200, batch_size=8, verbose=1)
 
-    for sender, message in st.session_state.chat_history:
-        if sender == "You":
-            st.markdown(f"**{sender}:** {message}")
-        else:
-            st.markdown(f":speech_balloon: **{sender}:** {message}")
+# Save model
+model.save("chatbot_model.h5")
 
-if __name__ == "__main__":
-    main()
-    app.run(port=5000, debug=True)
+# Load Model
+def load_model():
+    return tf.keras.models.load_model("chatbot_model.h5")
+
+# Convert user input to a bag of words
+def clean_up_sentence(sentence):
+    sentence_words = nltk.word_tokenize(sentence)
+    sentence_words = [stemmer.stem(word.lower()) for word in sentence_words]
+    return [1 if w in sentence_words else 0 for w in words]
+
+# Classify intent
+def classify(sentence):
+    model = load_model()
+    bow = np.array([clean_up_sentence(sentence)])
+    prediction = model.predict(bow)[0]
+    ERROR_THRESHOLD = 0.6
+    results = [[i, p] for i, p in enumerate(prediction) if p > ERROR_THRESHOLD]
+    results.sort(key=lambda x: x[1], reverse=True)
+    return [(classes[r[0]], r[1]) for r in results]
+
+# Generate response
+def chatbot_response(text):
+    intents_detected = classify(text)
+    if intents_detected:
+        intent_tag = intents_detected[0][0]
+        for intent in intents["intents"]:
+            if intent["tag"] == intent_tag:
+                return random.choice(intent["responses"])
+    return "I'm sorry, I don't understand."
+
+# Start chatbot
+print("Chatbot is ready! Type 'exit' to stop.")
+while True:
+    user_input = input("You: ")
+    if user_input.lower() == "exit":
+        break
+    print("Chatbot:", chatbot_response(user_input))
